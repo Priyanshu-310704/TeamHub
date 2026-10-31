@@ -8,13 +8,41 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    // =========================================================================
+    // CLIENT DISCONNECTION HANDLERS (graceful, no stack trace pollution)
+    // =========================================================================
+
+    /**
+     * Handles AsyncRequestNotUsableException - thrown when the client disconnects
+     * during async/streaming response processing. This is an expected condition
+     * when AI responses take longer than the client's patience or timeout.
+     *
+     * Spring MVC throws this when attempting to write to a response whose
+     * underlying connection has been aborted (ClientAbortException).
+     *
+     * We return null because there is no client to send a response to.
+     */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public ProblemDetail handleAsyncRequestNotUsable(AsyncRequestNotUsableException ex) {
+        log.info("[AI-STREAM] Client disconnected during async response processing: {}",
+                ex.getMessage() != null ? ex.getMessage() : "connection aborted");
+        // No response can be sent - the client is gone
+        return null;
+    }
+
+    // =========================================================================
+    // BUSINESS EXCEPTION HANDLERS (unchanged)
+    // =========================================================================
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ProblemDetail handleNotFound(ResourceNotFoundException ex) {
@@ -61,18 +89,60 @@ public class GlobalExceptionHandler {
         return problem;
     }
 
-    @ExceptionHandler(Exception.class)
-    public ProblemDetail handleGenericException(Exception ex) {
-        log.error("Unhandled exception occurred: ", ex);
+    // =========================================================================
+    // AI-SPECIFIC ERROR HANDLERS
+    // =========================================================================
 
-        String rootCause = (ex.getCause() != null && ex.getCause().getMessage() != null)
-                ? ex.getCause().getMessage()
-                : ex.getMessage();
-
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, ex.getMessage());
-        problem.setTitle("Internal Server Error");
-        problem.setProperty("rootCause", rootCause);
+    @ExceptionHandler(org.springframework.ai.retry.NonTransientAiException.class)
+    public ProblemDetail handleAiNonTransientError(org.springframework.ai.retry.NonTransientAiException ex) {
+        log.error("[AI-ERROR] Non-transient AI error (auth/config): {}", ex.getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "AI service is temporarily unavailable. Please try again later."
+        );
+        problem.setTitle("AI Service Error");
         problem.setProperty("timestamp", Instant.now());
         return problem;
+    }
+
+    // =========================================================================
+    // GENERIC FALLBACK
+    // =========================================================================
+
+    @ExceptionHandler(Exception.class)
+    public ProblemDetail handleGenericException(Exception ex) {
+        // Check if the root cause is a client abort (can be nested)
+        if (isClientAbort(ex)) {
+            log.info("[AI-STREAM] Client disconnected (nested abort): {}", ex.getMessage());
+            return null;
+        }
+
+        log.error("Unhandled exception occurred: ", ex);
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "An unexpected error occurred. Please try again."
+        );
+        problem.setTitle("Internal Server Error");
+        problem.setProperty("timestamp", Instant.now());
+        return problem;
+    }
+
+    /**
+     * Walks the exception cause chain looking for a ClientAbortException.
+     */
+    private boolean isClientAbort(Throwable ex) {
+        Throwable current = ex;
+        int depth = 0;
+        while (current != null && depth < 10) {
+            String name = current.getClass().getName();
+            if (name.contains("ClientAbortException") || name.contains("BrokenPipeException")
+                    || name.contains("ConnectionResetException")) {
+                return true;
+            }
+            current = current.getCause();
+            depth++;
+        }
+        return false;
     }
 }
