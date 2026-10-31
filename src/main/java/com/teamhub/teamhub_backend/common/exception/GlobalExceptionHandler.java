@@ -1,5 +1,6 @@
 package com.teamhub.teamhub_backend.common.exception;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -11,7 +12,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
-
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -62,8 +63,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleGenericException(Exception ex) {
+        log.error("Unhandled exception occurred: ", ex);
+
+        String rootCause = (ex.getCause() != null && ex.getCause().getMessage() != null)
+                ? ex.getCause().getMessage()
+                : ex.getMessage();
+
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, ex.getMessage());
         problem.setTitle("Internal Server Error");
+        problem.setProperty("rootCause", rootCause);
         problem.setProperty("timestamp", Instant.now());
         return problem;
     }
