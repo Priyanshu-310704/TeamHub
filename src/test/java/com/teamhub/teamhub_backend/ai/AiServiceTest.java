@@ -58,9 +58,6 @@ class AiServiceTest {
     private ChatClientRequestSpec requestSpec;
 
     @Mock
-    private ChatClient.UserSpec userSpec;
-
-    @Mock
     private CallResponseSpec callResponseSpec;
 
     private static final UUID PROJECT_ID = UUID.randomUUID();
