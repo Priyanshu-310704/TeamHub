@@ -28,6 +28,9 @@ FROM eclipse-temurin:25-jre
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 # create a non root application user
 RUN useradd --system --uid 10001 appuser
 
